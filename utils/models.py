@@ -15,17 +15,24 @@ class LocationContext:
     """
     state: Optional[str] = None        # e.g. "California"
     county: Optional[str] = None       # e.g. "Los Angeles County, California"
-    grain: Optional[str] = None        # "state" | "county"
-    source: str = "none"               # "explicit" | "high_fuzzy" | "user_confirmed"
+    grain: Optional[str] = None        # "state" | "county" | "census_block_group"
+    source: str = "none"               # "explicit" | "high_fuzzy" | "user_confirmed" | "fips"
     confirmed: bool = False
+    # FIPS-code search fields (set when user provides a numeric code directly)
+    cbg_fips: Optional[str] = None     # 12-digit CBG code, e.g. "421010137003"
+    tract_fips: Optional[str] = None   # 11-digit tract code, e.g. "42101013700"
 
     def is_set(self) -> bool:
-        return bool(self.state or self.county)
+        return bool(self.state or self.county or self.cbg_fips or self.tract_fips)
 
     def as_annotation(self) -> str:
         """Compact inline annotation appended to a question string."""
         parts: list = []
-        if self.county:
+        if self.cbg_fips:
+            parts.append(f"CBG FIPS {self.cbg_fips}")
+        elif self.tract_fips:
+            parts.append(f"tract FIPS {self.tract_fips}")
+        elif self.county:
             parts.append(f"{self.county} (county)")
         elif self.state:
             parts.append(f"{self.state} (state)")
@@ -36,6 +43,10 @@ class LocationContext:
         if not self.is_set():
             return ""
         parts: list = []
+        if self.cbg_fips:
+            parts.append(f"cbg_fips={self.cbg_fips}")
+        if self.tract_fips:
+            parts.append(f"tract_fips={self.tract_fips}")
         if self.state:
             parts.append(f"state={self.state}")
         if self.county:

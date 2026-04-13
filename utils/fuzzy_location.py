@@ -79,7 +79,7 @@ MEDIUM = "MEDIUM"
 
 # difflib score thresholds
 _HIGH_CUTOFF = 0.88
-_MEDIUM_CUTOFF = 0.70
+_MEDIUM_CUTOFF = 0.82   # raised from 0.70 — reduces noise from partial English words
 
 
 class FuzzyLocationResolver:
@@ -193,7 +193,9 @@ class FuzzyLocationResolver:
         words = re.findall(r"[a-zA-Z]+", question)
         candidates: List[str] = list(words)
         for i in range(len(words) - 1):
-            candidates.append(f"{words[i]} {words[i + 1]}")
+            w1, w2 = words[i].lower(), words[i + 1].lower()
+            if w1 not in _STOP_WORDS and w2 not in _STOP_WORDS:
+                candidates.append(f"{words[i]} {words[i + 1]}")
 
         seen: set = set()
         high_matches: List[Tuple[str, str, str]] = []   # (original, canonical, type)
@@ -267,27 +269,55 @@ class LocationStateManager:
     # Public API
     # ------------------------------------------------------------------
 
+    # FIPS patterns: 12-digit = CBG_FIPS, 11-digit = TRACT_FIPS
+    _FIPS_CBG   = re.compile(r'\b(\d{12})\b')
+    _FIPS_TRACT = re.compile(r'\b(\d{11})\b')
+
     def process_message(
         self, question: str
     ) -> Tuple[str, List[Tuple[str, str, str]]]:
         """
         Scan a new user message for location tokens.
 
+        FIPS codes are checked first. When a 12-digit (CBG) or 11-digit (tract)
+        code is detected, it is stored directly in LocationContext and fuzzy name
+        matching is skipped for that level — no ambiguity, no clarification needed.
+
         Returns:
           resolved_question  — question annotated with the current LocationContext
-                               (updated by any HIGH matches found)
+                               (updated by any HIGH matches / FIPS codes found)
           clarifications     — list of (original_token, canonical, loc_type)
                                for MEDIUM-confidence matches that need confirmation
         """
+        # --- FIPS code detection (runs before fuzzy matching) ---
+        fips_found = False
+        cbg_match = self._FIPS_CBG.search(question)
+        if cbg_match:
+            self.ctx.cbg_fips = cbg_match.group(1)
+            self.ctx.grain = "census_block_group"
+            self.ctx.source = "fips"
+            self.ctx.confirmed = True
+            fips_found = True
+
+        tract_match = self._FIPS_TRACT.search(question)
+        if tract_match and not cbg_match:
+            # Only set tract if no CBG code was found (CBG includes tract digits)
+            self.ctx.tract_fips = tract_match.group(1)
+            self.ctx.grain = "census_block_group"
+            self.ctx.source = "fips"
+            self.ctx.confirmed = True
+            fips_found = True
+
+        if fips_found:
+            # Annotate and return immediately; no fuzzy matching needed for code search
+            return self._annotate(question), []
+
+        # --- Fuzzy name matching ---
         high_matches, medium_matches = self._scan(question)
 
-        # Update state for every HIGH match found in this message
         for _token, canonical, loc_type in high_matches:
             self._update(loc_type, canonical, "high_fuzzy")
 
-        # Annotate question from the (now up-to-date) LocationContext.
-        # If the message introduced HIGH matches they're already in ctx;
-        # if no new location was found the existing ctx is carried forward.
         resolved_question = self._annotate(question)
         return resolved_question, medium_matches
 
@@ -320,7 +350,12 @@ class LocationStateManager:
         words = re.findall(r"[a-zA-Z]+", question)
         candidates: List[str] = list(words)
         for i in range(len(words) - 1):
-            candidates.append(f"{words[i]} {words[i + 1]}")
+            w1, w2 = words[i].lower(), words[i + 1].lower()
+            # Skip bigrams where either component is a stop word — this prevents
+            # phrases like "top counties" or "in Texas" from fuzzy-matching location
+            # names when the individual words are already filtered or resolved.
+            if w1 not in _STOP_WORDS and w2 not in _STOP_WORDS:
+                candidates.append(f"{words[i]} {words[i + 1]}")
 
         seen: set = set()
         high: List[Tuple[str, str, str]] = []

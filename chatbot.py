@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import uuid
 import traceback
@@ -170,6 +171,109 @@ class PopulationChatbot:
         # Should not be reached, but satisfies type checker
         return None, None, {"status": "UNKNOWN_ERROR", "message": "Retry loop exhausted."}
 
+    # --------------------------------------------------------
+    # CBG disambiguation helpers
+    # --------------------------------------------------------
+
+    @staticmethod
+    def _extract_county_hint(text: str) -> Optional[str]:
+        """
+        Extract a 'X County' or 'X Parish' phrase from free text.
+        Returns the matched phrase (e.g. 'Washington County') or None.
+        """
+        m = re.search(
+            r'\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s+(?:County|Parish|Borough|Census\s+Area)\b',
+            text,
+        )
+        return m.group(0) if m else None
+
+    def _check_cbg_county_ambiguity(self, county_hint: str) -> list:
+        """
+        Return the list of distinct STATE_NAME values in CBG_POPULATION_FEATURES
+        that match the given county_hint.  Returns [] on query error.
+        """
+        safe = county_hint.replace("'", "''")
+        result = self.client.query_rows(
+            f"SELECT DISTINCT STATE_NAME FROM CBG_POPULATION_FEATURES "
+            f"WHERE COUNTY_NAME LIKE '%{safe}%' ORDER BY STATE_NAME LIMIT 60"
+        )
+        if not result.ok or not result.rows:
+            return []
+        return [row["STATE_NAME"] for row in result.rows]
+
+    def _maybe_cbg_disambiguate(
+        self,
+        display_question: str,
+        resolved_question: str,
+        table_sel: TableSelection,
+        location_ctx: Optional[LocationContext],
+    ) -> Optional[FinalAnswer]:
+        """
+        Called after table selection when grain == census_block_group.
+
+        Returns a clarification FinalAnswer (and sets self._pending) if the
+        county is ambiguous across multiple states.
+        Returns None when no disambiguation is needed and the pipeline can proceed.
+
+        Skipped entirely when:
+          - grain is not census_block_group
+          - a FIPS code is already in LocationContext (exact match, no ambiguity)
+          - the state is already confirmed in LocationContext
+          - no county hint can be extracted
+          - the county matches exactly one state
+        """
+        if table_sel.grain != "census_block_group":
+            return None
+
+        # FIPS-based search: exact match, no ambiguity possible
+        if location_ctx and (location_ctx.cbg_fips or location_ctx.tract_fips):
+            return None
+
+        # State already known: trust it, skip check
+        if location_ctx and location_ctx.state:
+            return None
+
+        # Extract county hint: prefer LocationContext, fall back to question text
+        county_hint: Optional[str] = None
+        if location_ctx and location_ctx.county:
+            county_hint = location_ctx.county.split(",")[0].strip()
+        if not county_hint:
+            county_hint = self._extract_county_hint(resolved_question)
+        if not county_hint:
+            return None  # No county to check
+
+        matching_states = self._check_cbg_county_ambiguity(county_hint)
+        _dbg(f"CBG county ambiguity check for '{county_hint}': {matching_states}")
+
+        if len(matching_states) <= 1:
+            return None  # Unique (or 0 matches) — proceed
+
+        # Multiple states — ask the user to pick one
+        shown = matching_states[:12]
+        lines = [
+            f'"{county_hint}" exists in multiple states. Which state did you mean?'
+        ]
+        for s in shown:
+            lines.append(f"  • {s}")
+        if len(matching_states) > 12:
+            lines.append(f"  (and {len(matching_states) - 12} more — type the full state name)")
+        lines.append("\nJust type the state name and I'll search that county for you.")
+
+        msg = "\n".join(lines)
+        self._pending = {
+            "type": "cbg_disambiguation",
+            "original": display_question,
+            "resolved": resolved_question,
+            "county_hint": county_hint,
+            "matching_states": matching_states,
+        }
+        return FinalAnswer(
+            ok=False,
+            status="NEEDS_CLARIFICATION",
+            user_message=msg,
+            route="clarification",
+        )
+
     def handle_user_question(self, user_question: str) -> FinalAnswer:
         cid = self.conversation_id
         try:
@@ -179,7 +283,61 @@ class PopulationChatbot:
             # before doing anything else.
             # ------------------------------------------------
             if self._pending:
+                ptype = self._pending.get("type", "fuzzy")
                 low = user_question.strip().lower()
+
+                # ---- CBG county-disambiguation pending ----
+                if ptype == "cbg_disambiguation":
+                    # User is responding with a state name (e.g. "Pennsylvania")
+                    matching_states = self._pending["matching_states"]
+                    selected_state: Optional[str] = None
+
+                    # Try direct fuzzy resolution first
+                    fuzz_result = self._loc_mgr._resolver.resolve_token(user_question.strip())
+                    if fuzz_result and fuzz_result[0] == "state":
+                        candidate = fuzz_result[1]
+                        if candidate in matching_states:
+                            selected_state = candidate
+
+                    # Fall back: substring match against matching_states list
+                    if not selected_state:
+                        for s in matching_states:
+                            if low in s.lower() or s.lower().startswith(low):
+                                selected_state = s
+                                break
+
+                    if selected_state:
+                        original_q = self._pending["original"]
+                        self._pending = None
+                        self._loc_mgr.confirm_medium("state", selected_state)
+                        resolved_q = self._loc_mgr.annotate_from_state(original_q)
+                        _dbg(f"CBG state selected: {selected_state}  ctx: {self._loc_mgr.ctx}")
+                        resp = self._run_qa_pipeline(
+                            cid, original_q, resolved_q,
+                            history=self.history,
+                            location_ctx=self._loc_mgr.ctx,
+                        )
+                        self._record(user_question, resp.user_message)
+                        return resp
+                    else:
+                        # Can't match — ask again with the list
+                        shown = matching_states[:12]
+                        options = ", ".join(shown)
+                        if len(matching_states) > 12:
+                            options += f" (and {len(matching_states) - 12} more)"
+                        resp = FinalAnswer(
+                            ok=False,
+                            status="NEEDS_CLARIFICATION",
+                            user_message=(
+                                f"I couldn't match '{user_question}' to a state. "
+                                f"Please type one of: {options}"
+                            ),
+                            route="clarification",
+                        )
+                        self._record(user_question, resp.user_message)
+                        return resp
+
+                # ---- Fuzzy location clarification pending (yes/no) ----
                 if low in _AFFIRMATIVES:
                     # User confirmed — update LocationContext, rebuild resolved question
                     for _orig, canonical, loc_type in self._pending["items"]:
@@ -370,6 +528,16 @@ class PopulationChatbot:
                 error_message="Could not identify which dataset to query.",
                 context={"table_sel_message": table_sel.message},
             )
+
+        # Step 2b — CBG county disambiguation (only for census_block_group grain)
+        # Checks whether the county name is ambiguous across multiple states and,
+        # if so, pauses and asks the user to specify the state.
+        # This check is skipped when a FIPS code or confirmed state is already set.
+        disambig = self._maybe_cbg_disambiguate(
+            display_question, resolved_question, table_sel, location_ctx
+        )
+        if disambig is not None:
+            return disambig
 
         # Steps 3–5 — Generate → Validate → Execute (with retry)
         query_result, final_sql, last_error = self._generate_and_run(

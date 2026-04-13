@@ -133,23 +133,32 @@ TABLE_CATALOG: dict = {
     "CBG_POPULATION_FEATURES": {
         "description": (
             "Raw census block group (CBG) level rent burden data — most granular dataset. "
-            "Use only when the question explicitly asks about a neighborhood, tract, or block group."
+            "Use when the question asks about a neighborhood, census tract, or block group, "
+            "or when the user provides a 12-digit CBG FIPS code or 11-digit tract FIPS code."
         ),
         "grain": "census_block_group",
         "use_when": (
             "question asks about a specific neighborhood, census block group, tract, "
-            "or needs finer granularity than county"
+            "or needs finer granularity than county; also when a numeric FIPS code is provided"
         ),
         "notes": (
             "CRITICAL: All column names that contain colons, dots, or spaces MUST be "
             "wrapped in double quotes in SQL, e.g. \"Total: Renter-occupied housing units\". "
-            "CENSUS_BLOCK_GROUP is a 12-digit string FIPS code — do NOT cast to INTEGER. "
-            "Filter by STATE_NAME or COUNTY_NAME using ILIKE."
+            "CENSUS_BLOCK_GROUP and CBG_FIPS are 12-digit STRING FIPS codes — do NOT cast to INTEGER. "
+            "FIPS-code search: if cbg_fips is provided in ACTIVE LOCATION, use "
+            "WHERE CENSUS_BLOCK_GROUP = '{cbg_fips}' (string equality, single quotes). "
+            "If tract_fips is provided, use WHERE TRACT_FIPS = {tract_fips} (integer). "
+            "Semantic search: filter by STATE_NAME and COUNTY_NAME using LIKE, e.g. "
+            "WHERE STATE_NAME LIKE '%California%' AND COUNTY_NAME LIKE '%Los Angeles%'. "
+            "Always include both STATE_NAME and COUNTY_NAME filters when doing semantic search "
+            "to avoid returning rows from multiple states with the same county name."
         ),
         "sample_values": {
-            "CENSUS_BLOCK_GROUP": "'421010137003'  (12-digit string)",
+            "CENSUS_BLOCK_GROUP": "'421010137003'  (12-digit string, use string equality)",
+            "CBG_FIPS":           "'421010137003'  (same as CENSUS_BLOCK_GROUP)",
+            "TRACT_FIPS":         "42101013700  (11-digit integer)",
             "STATE_NAME":  "'Pennsylvania', 'California'",
-            "COUNTY_NAME": "'Philadelphia County, Pennsylvania'",
+            "COUNTY_NAME": "'Philadelphia County, Pennsylvania', 'Los Angeles County, California'",
             "FULL_GEO_NAME": "'Block Group 3, Philadelphia County, Pennsylvania'",
         },
         "columns": {
