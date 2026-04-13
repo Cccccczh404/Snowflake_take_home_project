@@ -4,12 +4,6 @@ A multi-turn chat agent grounded strictly in US Census ACS 5-year data, with eve
 
 ---
 
-## Live Demo
-
-> **Streamlit Community Cloud:**  https://chatbot-zhiheng.streamlit.app/
-
----
-
 ## Architecture Overview
 
 ```
@@ -18,33 +12,33 @@ User message
     ▼
 [1] Intent Router          ─── out-of-scope / inappropriate ──────────────────▶ Exception Agent
     │                      ─── conversational (meta / follow-up) ─────────────────────────────┐
-    │ qa_agent                                                                                 │
-    ▼                                                                                          │
+    │ qa_agent                                                                                │
+    ▼                                                                                         │
 [1b] Location State Manager  (offline, no LLM)                                                │
     │  • FIPS code detection  (12-digit CBG, 11-digit tract)                                  │
     │  • Fuzzy name resolution (aliases, prefix, difflib)                                     │
     │  • Explicit LocationContext updated; carry-forward on follow-ups                        │
     │  • MEDIUM-confidence → pause and ask user to confirm                                    │
-    ▼                                                                                          │
+    ▼                                                                                         │
 [2] Table Selector          selects STATE_SUMMARY / COUNTY_SUMMARY / CBG_POPULATION_FEATURES  │
-    │                                                                                          │
-    ▼                                                                                          │
+    │                                                                                         │
+    ▼                                                                                         │
 [2b] CBG County Disambiguation  (only for CBG grain, only when state unknown)                 │
     │  • SQL lookup: which states have this county?                                           │
-    │  • > 1 state → pause and ask user to pick                                              │
-    ▼                                                                                          │
+    │  • > 1 state → pause and ask user to pick                                               │
+    ▼                                                                                         │
 [3] SQL Generator           constrained SELECT only, schema-aware, location context injected  │
-    │                                                                                          │
-    ▼                                                                                          │
+    │                                                                                         │
+    ▼                                                                                         │
 [4] SQL Validator           LLM-based safety check; auto-corrects minor issues                │
-    │                                                                                          │
-    ▼                                                                                          │
+    │                                                                                         │
+    ▼                                                                                         │
 [5] Query Executor          SQLite in-memory (local CSVs); retry once on failure              │
-    │                                                                                          │
-    ▼                                                                                          │
+    │                                                                                         │
+    ▼                                                                                         │
 [6] QA Agent                grounds answer strictly in returned rows                          │
-    │                                                                                          ▼
-[7] Response Synthesizer    polishes tone, preserves all data, suggests follow-ups  ◀─────────┘
+    │                                                                                         ▼
+[7] Response Synthesizer    polishes tone, preserves all data, suggests follow-ups  ◀────────┘
     │                       (dialogue mode: answers from history only, no data rows)
     ▼
   Final Answer  ──▶  Streamlit UI  /  CLI
@@ -53,15 +47,16 @@ User message
     Visuals: Fuzzy location disambiguation flow and exception agent error handling.
 -->
 
-<img src="fuzzy.png" width="650" alt="Fuzzy Location Resolution Diagram">
-
-<p align="center"><em>Figure: When a user's query refers to an ambiguous place name, the offline fuzzy resolver attempts alias matching, prefix/similarity checks, and—if needed—asks the user to clarify among matching states or counties. This prevents incorrect answers and guides users to a valid Census location.</em></p>
-
-<br/>
-
-<img src="safety_followup.png" width="650" alt="Error Handling & Exception Agent Flow">
-
-<p align="center"><em>Figure: Pipeline error handling with exception agent followups: Every pipeline failure gets converted to a friendly, actionable message, with tailored suggestions and clear feedback. The user is never shown a stack trace or empty table, preserving a smooth experience.</em></p>
+<table align="center"><tr>
+<td align="center" width="50%">
+<img src="fuzzy.png" width="320" alt="Fuzzy Location Resolution Diagram"><br/>
+<em>Figure: When a user's query refers to an ambiguous place name, the offline fuzzy resolver attempts alias matching, prefix/similarity checks, and follow-up questions.</em>
+</td>
+<td align="center" width="50%">
+<img src="safety_followup.png" width="320" alt="Error Handling & Exception Agent Flow"><br/>
+<em>Figure: Safety guardrail with Exception Agent. Also the explicit state memory managerment persists, ignoring melicious request.</em>
+</td>
+</tr></table>
 
 ## Precomputation & Aggregation
 
@@ -90,10 +85,10 @@ Two complementary mechanisms keep the conversation coherent across turns:
 Location resolution runs entirely offline — no LLM call needed. `FuzzyLocationResolver` resolves user input to canonical Census names using a three-stage approach: an alias dictionary (`CA` → California, `NY` → New York, `cali` → California), unique-prefix matching, and difflib similarity scoring. Matches are classified as HIGH (used silently) or MEDIUM (surfaced as a confirmation prompt before querying). For CBG-level queries, a fast `DISTINCT STATE_NAME` SQL lookup catches county names that exist in multiple states (e.g. "Washington County" in 30+ states) and asks the user to pick.
 
 ### 4. Grounded QA with response synthesizer
-The pipeline separates *what the data says* from *how to say it*. The QA agent is strictly **forbidden from referencing any number not present in the query results** — it produces a factually grounded but plain answer. The response synthesizer then adjusts tone, adds a friendly closing, and suggests relevant follow-up questions, but is required to preserve every data value verbatim. This two-step design makes it easy to verify correctness (check the QA output) independently of presentation quality.
+The pipeline separates *what the data says* from *how to say it*. The QA agent is strictly **forbidden from referencing any number not present in the query results** — it produces a factually grounded but plain answer. The LLM response synthesizer then adjusts tone, adds a friendly closing, and suggests relevant follow-up questions, but is required to preserve every data value verbatim. This two-step design makes it easy to verify correctness (check the QA output) independently of presentation quality.
 
 ### 5. Exception agent with in-context learning as safety guardrail
-Every question passes through the intent router before any data pipeline step runs. Off-topic questions (weather, politics, sports), prompt injection attempts, and anything outside the rent burden domain are caught here and routed to the exception agent, which returns a clear, helpful message explaining what the chatbot covers. The same agent handles all downstream failures (no matching rows, SQL errors, missing location) so the user always gets a natural-language response rather than an empty result or stack trace.
+Every question passes through the LLM intent router before any data pipeline step runs. Off-topic questions (weather, politics, sports), prompt injection attempts, and anything outside the rent burden domain are caught here and routed to the exception agent, which returns a clear, helpful message explaining what the chatbot covers. The same agent handles all downstream failures (no matching rows, SQL errors, missing location) so the user always gets a natural-language response rather than an empty result or stack trace.
 
 The exception agent receives three inputs: the **failure status** (the pipeline stage where the error occurred, e.g. `MISSING_REQUIRED_INFO`, `NO_RESULTS`, `SQL_EXECUTION_ERROR`), the **failure reason** in plain text, and the **last few conversation turns**. Using the conversation history, it generates tailored follow-up suggestions — for example, if a county lookup returned no rows the agent might suggest switching to state-level or checking the spelling, whereas a SQL execution failure might prompt the user to try a different granularity.
 
