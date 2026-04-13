@@ -4,6 +4,12 @@ A multi-turn chat agent grounded strictly in US Census ACS 5-year data, with eve
 
 ---
 
+## Live Demo
+
+> **Streamlit Community Cloud:**  https://chatbot-zhiheng.streamlit.app/
+
+---
+
 ## Architecture Overview
 
 ```
