@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import os
 
+# Compute project root early so dotenv search is stable even when cwd differs.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 try:
     # Allows local dev via a .env file without hardcoding secrets.
-    from dotenv import load_dotenv
+    from dotenv import find_dotenv, load_dotenv
 
-    load_dotenv()
+    # Prefer a `.env` at the project root; otherwise search upward from this file.
+    # This supports a `.env` located outside `utils/` without changing file paths.
+    env_path = os.path.join(_PROJECT_ROOT, ".env")
+    if os.path.exists(env_path):
+        load_dotenv(env_path, override=False)
+    else:
+        found = find_dotenv(".env", usecwd=False)
+        if found:
+            load_dotenv(found, override=False)
 except Exception:
     # If python-dotenv isn't installed (or .env is absent), fall back to real env vars.
     pass
@@ -14,8 +25,6 @@ except Exception:
 # ============================================================
 # LOCAL DATA FILES  (relative to the project root)
 # ============================================================
-
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 LOCAL_CSV_FILES = {
     "STATE_SUMMARY":           os.path.join(_PROJECT_ROOT, "output", "state_summary.csv"),
