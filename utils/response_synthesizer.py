@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from .client import SnowflakeAgentClient
 from .config import LLM_POPULATION_GUIDANCE
-from .models import FinalAnswer
+from .models import FinalAnswer, LocationContext
 
 # ----------------------------------------------------------
 # Prompts
@@ -62,10 +62,10 @@ Raw data answer to rewrite:
 """
 
 _USER_DIALOGUE_TMPL = """\
-{history_block}User message: {question}
+{history_block}{loc_block}User message: {question}
 
 [No database query was run — this is a conversational message.
-Answer using only the conversation history above.]
+Answer using only the conversation history and active location state above.]
 """
 
 _HISTORY_BLOCK_TMPL = """\
@@ -119,6 +119,7 @@ def synthesize_response(
     answer: FinalAnswer,
     history: list | None = None,
     dialogue: bool = False,
+    location_ctx: Optional[LocationContext] = None,
 ) -> FinalAnswer:
     """
     Post-process a FinalAnswer through the response synthesizer.
@@ -129,8 +130,10 @@ def synthesize_response(
     """
     history_block = _build_history_block(history or [])
     if dialogue:
+        loc_block = location_ctx.as_prompt_block() if location_ctx and location_ctx.is_set() else ""
         user_prompt = _USER_DIALOGUE_TMPL.format(
             history_block=history_block,
+            loc_block=loc_block,
             question=user_question,
         )
     else:

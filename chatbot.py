@@ -19,6 +19,8 @@ from utils import (
     SNOWFLAKE_CONNECTION,
     MAX_PREVIEW_ROWS,
     SnowflakeAgentClient,
+    LocationContext,
+    LocationStateManager,
     FinalAnswer,
     QueryExecutionResult,
     TableSelection,
@@ -59,8 +61,10 @@ class PopulationChatbot:
         self.conversation_id = str(uuid.uuid4())
         # Rolling window of the last HISTORY_LIMIT turns: [{"user": ..., "bot": ...}]
         self.history: list = []
+        # Explicit location state — updated by confirmed location mentions
+        self._loc_mgr = LocationStateManager(client._location_resolver)
         # Set when a NEEDS_CLARIFICATION response was issued; cleared on resolution
-        self._pending: Optional[dict] = None  # {"original": str, "resolved": str, "items": list}
+        self._pending: Optional[dict] = None  # {"original": str, "items": list}
 
     def _record(self, user_input: str, agent_response: str) -> None:
         """Append a turn to history, capping at HISTORY_LIMIT."""
@@ -74,6 +78,7 @@ class PopulationChatbot:
         user_question: str,
         table_sel: TableSelection,
         history: Optional[list] = None,
+        location_ctx: Optional[LocationContext] = None,
     ) -> Tuple[Optional[QueryExecutionResult], Optional[str], Optional[dict]]:
         """
         Steps 3–5: generate SQL → validate → execute, with one automatic retry.
@@ -100,6 +105,7 @@ class PopulationChatbot:
                 previous_sql=previous_sql,
                 previous_error=previous_error,
                 history=hist,
+                location_ctx=location_ctx,
             )
 
             if not sql_gen.ok or not sql_gen.sql:
@@ -175,11 +181,19 @@ class PopulationChatbot:
             if self._pending:
                 low = user_question.strip().lower()
                 if low in _AFFIRMATIVES:
-                    # User confirmed — swap in the resolved question
-                    resolved_question = self._pending["resolved"]
-                    _dbg(f"clarification confirmed → using: {resolved_question}")
+                    # User confirmed — update LocationContext, rebuild resolved question
+                    for _orig, canonical, loc_type in self._pending["items"]:
+                        self._loc_mgr.confirm_medium(loc_type, canonical)
+                    original_q = self._pending["original"]
+                    resolved_question = self._loc_mgr.annotate_from_state(original_q)
+                    _dbg(f"clarification confirmed → ctx: {self._loc_mgr.ctx}")
+                    _dbg(f"resolved question: {resolved_question}")
                     self._pending = None
-                    resp = self._run_qa_pipeline(cid, user_question, resolved_question, history=self.history)
+                    resp = self._run_qa_pipeline(
+                        cid, original_q, resolved_question,
+                        history=self.history,
+                        location_ctx=self._loc_mgr.ctx,
+                    )
                     self._record(user_question, resp.user_message)
                     return resp
                 elif low in _NEGATIVES:
@@ -212,11 +226,12 @@ class PopulationChatbot:
 
             if route.route == "conversational_agent":
                 # ------------------------------------------------
-                # Conversational/meta question — no data query needed.
-                # Pass straight to the response synthesizer with history
-                # so it can answer from conversation context alone.
+                # Conversational/meta question — no data query.
+                # Pass LocationContext + history to the synthesizer so it
+                # can answer questions like "which state was I asking about?".
+                # Fuzzy search does NOT run for conversational messages.
                 # ------------------------------------------------
-                _dbg(f"conversational route — intent: {route.intent}")
+                _dbg(f"conversational route — intent: {route.intent}, loc_ctx: {self._loc_mgr.ctx}")
                 stub = FinalAnswer(
                     ok=True,
                     status="CONVERSATIONAL",
@@ -229,6 +244,7 @@ class PopulationChatbot:
                     answer=stub,
                     history=self.history,
                     dialogue=True,
+                    location_ctx=self._loc_mgr.ctx,
                 )
                 resp.route = "conversational_agent"
                 resp.status = "CONVERSATIONAL"
@@ -248,15 +264,16 @@ class PopulationChatbot:
                 return resp
 
             # ------------------------------------------------
-            # Step 1b — Offline fuzzy location resolution
-            # HIGH confidence → silently inject canonical name into question.
-            # MEDIUM confidence → stop and ask the user to confirm before
-            #   proceeding, so we never query with a wrong location.
+            # Step 1b — Location state resolution (qa_agent path only)
+            # LocationStateManager scans the message, updates LocationContext
+            # for HIGH matches, and carries forward state for follow-ups.
+            # MEDIUM matches → ask the user to confirm; no state change yet.
             # ------------------------------------------------
-            resolved_question, clarifications = self.client.augment_question(user_question)
+            resolved_question, clarifications = self._loc_mgr.process_message(user_question)
 
             if clarifications:
-                # MEDIUM-confidence match — ask user to confirm before querying
+                # MEDIUM-confidence match — ask user to confirm before querying.
+                # Store original question + match items; state is NOT updated yet.
                 lines = [
                     "I want to make sure I understood the location correctly. "
                     "Did you mean:"
@@ -267,23 +284,9 @@ class PopulationChatbot:
                     '\nJust say "yes" to confirm, or rephrase with the full name.'
                 )
                 msg = "\n".join(lines)
-
-                # Build the fully-resolved question to use when confirmed.
-                # MEDIUM matches are not yet in resolved_question (only HIGH are),
-                # so we append them explicitly here as confirmed context.
-                medium_ctx = ", ".join(
-                    f"{canonical} ({loc_type})"
-                    for _, canonical, loc_type in clarifications
-                )
-                if "[location context:" in resolved_question:
-                    confirmed_resolved = resolved_question.rstrip("]") + f"; {medium_ctx}]"
-                else:
-                    confirmed_resolved = user_question + f"  [location context: {medium_ctx}]"
-
                 self._pending = {
                     "original": user_question,
-                    "resolved": confirmed_resolved,
-                    "items": clarifications,
+                    "items": clarifications,  # (original_token, canonical, loc_type)
                 }
                 resp = FinalAnswer(
                     ok=False,
@@ -295,9 +298,12 @@ class PopulationChatbot:
                 return resp
 
             if resolved_question != user_question:
-                _dbg(f"location resolved: {resolved_question}")
+                _dbg(f"location resolved: {resolved_question}  ctx: {self._loc_mgr.ctx}")
 
-            resp = self._run_qa_pipeline(cid, user_question, resolved_question, route.intent, self.history)
+            resp = self._run_qa_pipeline(
+                cid, user_question, resolved_question, route.intent,
+                self.history, self._loc_mgr.ctx,
+            )
             self._record(user_question, resp.user_message)
             return resp
 
@@ -321,12 +327,14 @@ class PopulationChatbot:
         resolved_question: str,
         intent: Optional[str] = None,
         history: Optional[list] = None,
+        location_ctx: Optional[LocationContext] = None,
     ) -> FinalAnswer:
         """
         Steps 2–7: table selection → SQL gen/validate/execute → QA → synthesis.
         display_question — original user text (shown in error messages)
-        resolved_question — fuzzy-augmented text (used for all LLM calls)
-        history         — last HISTORY_LIMIT turns passed to each LLM agent
+        resolved_question — state-annotated text (used for all LLM calls)
+        history          — last HISTORY_LIMIT turns passed to each LLM agent
+        location_ctx     — current LocationContext for canonical name injection
         """
         hist = history or []
 
@@ -337,6 +345,7 @@ class PopulationChatbot:
             user_question=resolved_question,
             intent=intent,
             history=hist,
+            location_ctx=location_ctx,
         )
 
         if not table_sel.ok:
@@ -368,6 +377,7 @@ class PopulationChatbot:
             user_question=resolved_question,
             table_sel=table_sel,
             history=hist,
+            location_ctx=location_ctx,
         )
 
         if last_error:
@@ -411,6 +421,7 @@ class PopulationChatbot:
             user_question=resolved_question,
             answer=final_answer,
             history=self.history,
+            location_ctx=location_ctx,
         )
         return final_answer
 

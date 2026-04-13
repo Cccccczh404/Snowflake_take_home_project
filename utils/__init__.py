@@ -9,6 +9,7 @@ from .config import (
 )
 from .models import (
     AgentStatus,
+    LocationContext,
     RouteResult,
     TableSelection,
     SqlGenerationResult,
@@ -17,7 +18,7 @@ from .models import (
     FinalAnswer,
 )
 from .client import SnowflakeAgentClient, parse_llm_json
-from .fuzzy_location import FuzzyLocationResolver
+from .fuzzy_location import FuzzyLocationResolver, LocationStateManager
 from .agent_intent_router import call_intent_router
 from .agent_qa import call_qa_agent
 from .agent_exception import call_exception_agent

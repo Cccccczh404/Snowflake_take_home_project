@@ -6,7 +6,7 @@ from typing import Optional
 
 from .client import SnowflakeAgentClient, parse_llm_json
 from .config import LLM_POPULATION_GUIDANCE, TABLE_CATALOG
-from .models import TableSelection
+from .models import LocationContext, TableSelection
 
 # ----------------------------------------------------------
 # Prompt builder
@@ -124,6 +124,7 @@ def call_pick_tables(
     user_question: str,
     intent: Optional[str],
     history: Optional[list] = None,
+    location_ctx: Optional[LocationContext] = None,
 ) -> TableSelection:
     """
     Use the Cortex LLM to select the right Snowflake table(s) for the question.
@@ -136,7 +137,8 @@ def call_pick_tables(
         return shortcut
 
     history_block = _build_history_block(history or [])
-    user_prompt = history_block + _USER_TMPL.format(
+    loc_block = location_ctx.as_prompt_block() if location_ctx and location_ctx.is_set() else ""
+    user_prompt = history_block + loc_block + _USER_TMPL.format(
         intent=intent or "unknown",
         question=user_question,
     )

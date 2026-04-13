@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from .client import SnowflakeAgentClient, parse_llm_json
 from .config import LLM_POPULATION_GUIDANCE, MAX_RESULT_ROWS, TABLE_CATALOG
-from .models import SqlGenerationResult
+from .models import LocationContext, SqlGenerationResult
 
 # ----------------------------------------------------------
 # Schema builder — injects only the selected table(s) into the prompt
@@ -138,6 +138,7 @@ def call_generate_sql(
     previous_sql: Optional[str] = None,
     previous_error: Optional[str] = None,
     history: Optional[list] = None,
+    location_ctx: Optional[LocationContext] = None,
 ) -> SqlGenerationResult:
     """
     Use the Cortex LLM to generate a safe, constrained Snowflake SELECT query.
@@ -153,6 +154,7 @@ def call_generate_sql(
     )
 
     history_block = _build_history_block(history or [])
+    loc_block = location_ctx.as_prompt_block() if location_ctx and location_ctx.is_set() else ""
 
     if previous_sql and previous_error:
         user_prompt = _USER_RETRY_TMPL.format(
@@ -168,6 +170,10 @@ def call_generate_sql(
             question=user_question,
             tables=", ".join(tables),
         )
+    # Prepend location block after history so the LLM has canonical names
+    # available for WHERE clause generation before it reads the question.
+    if loc_block:
+        user_prompt = loc_block + user_prompt
 
     raw = client.call_cortex(system_prompt, user_prompt)
 

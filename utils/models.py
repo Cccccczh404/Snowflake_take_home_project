@@ -5,6 +5,47 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass
+class LocationContext:
+    """
+    Explicit location state for a chat session.
+
+    Tracks the confirmed state/county that the conversation is about.
+    Updated by LocationStateManager; passed through the agent pipeline so
+    every LLM call has a canonical location without re-running fuzzy search.
+    """
+    state: Optional[str] = None        # e.g. "California"
+    county: Optional[str] = None       # e.g. "Los Angeles County, California"
+    grain: Optional[str] = None        # "state" | "county"
+    source: str = "none"               # "explicit" | "high_fuzzy" | "user_confirmed"
+    confirmed: bool = False
+
+    def is_set(self) -> bool:
+        return bool(self.state or self.county)
+
+    def as_annotation(self) -> str:
+        """Compact inline annotation appended to a question string."""
+        parts: list = []
+        if self.county:
+            parts.append(f"{self.county} (county)")
+        elif self.state:
+            parts.append(f"{self.state} (state)")
+        return f"  [location context: {', '.join(parts)}]" if parts else ""
+
+    def as_prompt_block(self) -> str:
+        """Multi-line block for injection into LLM system/user prompts."""
+        if not self.is_set():
+            return ""
+        parts: list = []
+        if self.state:
+            parts.append(f"state={self.state}")
+        if self.county:
+            parts.append(f"county={self.county}")
+        if self.grain:
+            parts.append(f"grain={self.grain}")
+        return f"[ACTIVE LOCATION: {', '.join(parts)}]\n"
+
+
+@dataclass
 class AgentStatus:
     ok: bool
     status: str
