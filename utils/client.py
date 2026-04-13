@@ -23,17 +23,9 @@ class SnowflakeAgentClient:
     Snowflake tables are required. Snowflake is only contacted for LLM inference.
     """
 
-    def __init__(
-        self,
-        connection_kwargs: Dict[str, Any] | None = None,
-        *,
-        session: Session | None = None,
-    ) -> None:
+    def __init__(self, connection_kwargs: Dict[str, Any]) -> None:
         # Snowflake — LLM only
-        if session is not None:
-            self.session = session
-        else:
-            self.session = Session.builder.configs(connection_kwargs or {}).create()
+        self.session = Session.builder.configs(connection_kwargs).create()
         # Local SQLite — data queries
         self._db = self._load_local_db()
         # Offline fuzzy location resolver — built from actual DB rows

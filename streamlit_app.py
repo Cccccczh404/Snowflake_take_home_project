@@ -1,131 +1,149 @@
 from __future__ import annotations
 
 import os
+from typing import Optional
 
 import streamlit as st
 
-from chatbot import PopulationChatbot
-from utils import SNOWFLAKE_CONNECTION, SnowflakeAgentClient
-
-
-def _get_snowpark_session():
+def _hydrate_env_from_streamlit_secrets() -> None:
     """
-    Prefer Streamlit in Snowflake's active session when available.
-    Fall back to creating a Snowpark Session from Streamlit secrets (Streamlit Cloud)
-    or environment variables.
+    Streamlit Community Cloud provides secrets via `st.secrets`, not necessarily
+    as process environment variables. The rest of the code reads Snowflake
+    settings from env via `utils.config`, so we mirror secrets into env early.
     """
     try:
-        from snowflake.snowpark.context import get_active_session  # type: ignore
-
-        return get_active_session()
+        secrets = st.secrets  # can raise if not running under Streamlit
     except Exception:
-        pass
+        return
 
-    try:
-        import snowflake.snowpark as snowpark
+    keys = [
+        "SNOWFLAKE_ACCOUNT",
+        "SNOWFLAKE_USER",
+        "SNOWFLAKE_PASSWORD",
+        "SNOWFLAKE_AUTHENTICATOR",
+        "SNOWFLAKE_ROLE",
+        "SNOWFLAKE_WAREHOUSE",
+        "SNOWFLAKE_DATABASE",
+        "SNOWFLAKE_SCHEMA",
+    ]
+    for k in keys:
+        if os.getenv(k):
+            continue
+        if k in secrets and str(secrets[k]).strip():
+            os.environ[k] = str(secrets[k])
 
-        if "snowflake" in st.secrets:
-            return snowpark.Session.builder.configs(dict(st.secrets["snowflake"])).create()
-        if "connections" in st.secrets and "snowflake" in st.secrets["connections"]:
-            return snowpark.Session.builder.configs(dict(st.secrets["connections"]["snowflake"])).create()
-    except Exception:
-        # We'll fail below with a clearer message.
+
+_hydrate_env_from_streamlit_secrets()
+
+
+import chatbot  # noqa: E402
+from chatbot import PopulationChatbot  # noqa: E402
+from utils import SNOWFLAKE_CONNECTION, SnowflakeAgentClient, FinalAnswer  # noqa: E402
+
+
+APP_TITLE = "US Population Rent Burden Chatbot"
+
+
+def _set_debug(enabled: bool) -> None:
+    # Keep original behavior; just allow UI to toggle printing to logs.
+    chatbot.DEBUG = bool(enabled)
+
+
+@st.cache_resource(show_spinner="Starting chatbot…")
+def _create_client() -> SnowflakeAgentClient:
+    return SnowflakeAgentClient(SNOWFLAKE_CONNECTION)
+
+
+def _get_bot() -> PopulationChatbot:
+    if "bot" not in st.session_state:
+        client = _create_client()
+        st.session_state["bot"] = PopulationChatbot(client)
+    return st.session_state["bot"]
+
+
+def _render_answer(resp: FinalAnswer) -> None:
+    st.markdown(resp.user_message)
+
+    with st.expander("Details", expanded=False):
+        cols = st.columns(3)
+        cols[0].metric("Route", resp.route)
+        cols[1].metric("Status", resp.status)
+        cols[2].metric("OK", "yes" if resp.ok else "no")
+
+        if resp.source_tables:
+            st.write("**Source table(s):**", ", ".join(resp.source_tables))
+        if resp.sql:
+            st.code(resp.sql)
+        if resp.data:
+            st.dataframe(resp.data, use_container_width=True)
+
+
+def _missing_snowflake_creds() -> Optional[str]:
+    # Required to create a Snowpark Session for Cortex calls.
+    required = ["account", "user", "password"]
+    missing = [k for k in required if not (SNOWFLAKE_CONNECTION.get(k) or "").strip()]
+    if not missing:
         return None
-
-    # Last-chance fallback: environment variables via utils/config.py
-    if any(v for v in SNOWFLAKE_CONNECTION.values()):
-        import snowflake.snowpark as snowpark
-
-        return snowpark.Session.builder.configs(SNOWFLAKE_CONNECTION).create()
-
-    return None
-
-
-@st.cache_resource(show_spinner="Initializing Snowflake + loading local data…")
-def _get_client_and_bot() -> tuple[SnowflakeAgentClient, PopulationChatbot]:
-    session = _get_snowpark_session()
-    if session is None:
-        raise RuntimeError(
-            "Missing Snowflake connection. Configure Streamlit secrets under key "
-            "`snowflake` (or `connections.snowflake`), or set SNOWFLAKE_* env vars."
-        )
-    client = SnowflakeAgentClient(session=session)
-    bot = PopulationChatbot(client)
-    return client, bot
+    return (
+        "Snowflake credentials are not configured. "
+        "Set `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, and `SNOWFLAKE_PASSWORD` "
+        "as environment variables (or Streamlit secrets) to run the app."
+    )
 
 
 def main() -> None:
-    st.set_page_config(page_title="US Rent Burden Chatbot", page_icon="🏠", layout="centered")
+    st.set_page_config(page_title=APP_TITLE, page_icon="🏠", layout="centered")
 
-    st.title("US Population Rent Burden Chatbot")
-    st.caption("Ask about rent burden by state or county (data is queried locally; Cortex is used for LLM steps).")
+    st.title(APP_TITLE)
+    st.caption(
+        "Ask about rent burden by US state, county, or (if needed) census block group. "
+        "This UI wraps your existing `PopulationChatbot` without changing its logic."
+    )
 
     with st.sidebar:
-        st.subheader("Connection")
-        st.write(
-            "This app uses a Snowflake session for Cortex LLM calls. "
-            "In Streamlit in Snowflake it uses your active session automatically."
-        )
-        st.subheader("Controls")
-        if st.button("New conversation", use_container_width=True):
-            st.session_state.pop("conversation", None)
-            st.session_state.pop("messages", None)
+        st.header("Settings")
+        debug_enabled = st.toggle("Debug logs", value=False)
+        _set_debug(debug_enabled)
+
+        if st.button("New conversation", type="secondary", use_container_width=True):
+            if "bot" in st.session_state:
+                del st.session_state["bot"]
             st.rerun()
 
-    client, bot = _get_client_and_bot()
+        st.divider()
+        st.write("**Deployment note:** This app requires Snowflake Cortex access for LLM calls.")
 
-    if "conversation" not in st.session_state:
-        st.session_state.conversation = bot
-    else:
-        # Keep cached client, but preserve the per-user conversation state.
-        bot = st.session_state.conversation
+    missing_msg = _missing_snowflake_creds()
+    if missing_msg:
+        st.error(missing_msg)
+        st.stop()
+
+    bot = _get_bot()
 
     if "messages" not in st.session_state:
-        st.session_state.messages = []
+        st.session_state["messages"] = []
 
-    for m in st.session_state.messages:
+    for m in st.session_state["messages"]:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
-            if m.get("extras"):
-                with st.expander("Details", expanded=False):
-                    if m["extras"].get("status"):
-                        st.code(m["extras"]["status"])
-                    if m["extras"].get("sql"):
-                        st.code(m["extras"]["sql"])
-                    if m["extras"].get("source_tables"):
-                        st.write("**Source tables:**", ", ".join(m["extras"]["source_tables"]))
-                    if m["extras"].get("row_count") is not None:
-                        st.write("**Rows returned:**", m["extras"]["row_count"])
 
-    prompt = st.chat_input("Ask a question (e.g., “Which state has the highest severe rent burden?”)")
+    prompt = st.chat_input("Ask a question (e.g., 'What is rent burden in California?')")
     if not prompt:
         return
 
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state["messages"].append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
             resp = bot.handle_user_question(prompt)
-        st.markdown(resp.user_message)
+        _render_answer(resp)
 
-        extras = {
-            "status": f"{resp.status} ({resp.route})",
-            "sql": resp.sql,
-            "source_tables": resp.source_tables,
-            "row_count": resp.row_count,
-        }
-        st.session_state.messages.append(
-            {"role": "assistant", "content": resp.user_message, "extras": extras}
-        )
-
-    # Keep connection alive for subsequent turns
-    _ = client
+    st.session_state["messages"].append({"role": "assistant", "content": resp.user_message})
 
 
 if __name__ == "__main__":
-    # Allow Streamlit to run this file directly.
-    os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    # Streamlit runs `main()` on import, but keep CLI-friendly execution too.
     main()
 

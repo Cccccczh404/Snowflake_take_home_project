@@ -2,29 +2,11 @@ from __future__ import annotations
 
 import os
 
-# Compute project root early so dotenv search is stable even when cwd differs.
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-try:
-    # Allows local dev via a .env file without hardcoding secrets.
-    from dotenv import find_dotenv, load_dotenv
-
-    # Prefer a `.env` at the project root; otherwise search upward from this file.
-    # This supports a `.env` located outside `utils/` without changing file paths.
-    env_path = os.path.join(_PROJECT_ROOT, ".env")
-    if os.path.exists(env_path):
-        load_dotenv(env_path, override=False)
-    else:
-        found = find_dotenv(".env", usecwd=False)
-        if found:
-            load_dotenv(found, override=False)
-except Exception:
-    # If python-dotenv isn't installed (or .env is absent), fall back to real env vars.
-    pass
-
 # ============================================================
 # LOCAL DATA FILES  (relative to the project root)
 # ============================================================
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 LOCAL_CSV_FILES = {
     "STATE_SUMMARY":           os.path.join(_PROJECT_ROOT, "output", "state_summary.csv"),
@@ -36,17 +18,23 @@ LOCAL_CSV_FILES = {
 # SNOWFLAKE CONNECTION  (used only for Cortex LLM calls)
 # ============================================================
 
+def _env(name: str, default: str = "") -> str:
+    val = os.getenv(name)
+    return default if val is None else val
+
+
+# NOTE:
+# These values must come from environment variables (or Streamlit secrets),
+# because this repo is intended to be deployable on the public internet.
 SNOWFLAKE_CONNECTION = {
-    # NOTE: For security, never hardcode credentials in code.
-    # Provide these via environment variables or Streamlit secrets.
-    "account": os.getenv("SNOWFLAKE_ACCOUNT", ""),
-    "user": os.getenv("SNOWFLAKE_USER", ""),
-    "password": os.getenv("SNOWFLAKE_PASSWORD", ""),
-    "authenticator": os.getenv("SNOWFLAKE_AUTHENTICATOR", "snowflake"),
-    "role": os.getenv("SNOWFLAKE_ROLE", ""),
-    "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", ""),
-    "database": os.getenv("SNOWFLAKE_DATABASE", ""),
-    "schema": os.getenv("SNOWFLAKE_SCHEMA", ""),
+    "account": _env("SNOWFLAKE_ACCOUNT"),
+    "user": _env("SNOWFLAKE_USER"),
+    "password": _env("SNOWFLAKE_PASSWORD"),
+    "authenticator": _env("SNOWFLAKE_AUTHENTICATOR", "snowflake"),
+    "role": _env("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
+    "warehouse": _env("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
+    "database": _env("SNOWFLAKE_DATABASE", "US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET"),
+    "schema": _env("SNOWFLAKE_SCHEMA", "PUBLIC"),
 }
 
 # ============================================================

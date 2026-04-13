@@ -1,4 +1,3 @@
 streamlit
-snowflake-snowpark-python[pandas]
 pandas
-python-dotenv
+snowflake-snowpark-python

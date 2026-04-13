@@ -1,66 +1,35 @@
-# US Population Rent Burden Chatbot (Web UI)
+# US Population Rent Burden Chatbot (Streamlit)
 
-This repo contains a rent-burden chatbot:
-- Data queries run **locally** against `output/*.csv` (loaded into an in-memory SQLite DB).
-- LLM steps (intent routing, SQL generation/validation, grounded answer, tone synthesis) call **Snowflake Cortex** via Snowpark.
+This repo contains your existing rent-burden chatbot (`chatbot.py`) plus a Streamlit UI wrapper (`streamlit_app.py`).
 
-## Web interface (Streamlit)
+## Deploy (public URL, no local setup)
 
-The web UI lives in `streamlit_app.py`.
+Use **Streamlit Community Cloud**:
 
-### Option A (recommended): Streamlit in Snowflake
+- **App file**: `streamlit_app.py`
+- **Python deps**: `requirements.txt`
 
-Snowflake’s docs describe how Streamlit in Snowflake apps can be shared via **app-viewer URLs** (a clean URL without Snowsight chrome) and **app-builder URLs**:
-- Snowflake docs: [Sharing Streamlit in Snowflake apps](https://docs.snowflake.com/developer-guide/streamlit/features/sharing-streamlit-apps)
+### Configure secrets (required)
 
-At a high level:
-1. Create a Streamlit app in Snowflake (Snowsight → Projects → Streamlit) and upload `streamlit_app.py` as the app code.
-2. Ensure the role/user running the app can use Cortex and has access to required objects.
-3. Use the Streamlit app **Share** feature to copy an **app-viewer URL** for evaluation.
+The chatbot uses **Snowflake Cortex** for LLM calls (data queries run locally from the CSVs).
 
-Snowflake also supports managing apps via the Snowflake CLI (including retrieving the app URL):
-- Snowflake docs: [Managing Streamlit apps](https://docs.snowflake.com/en/developer-guide/snowflake-cli/streamlit-apps/manage-apps/manage-app)
-
-### Option B: Streamlit Community Cloud (public internet)
-
-If you want a publicly accessible URL (no Snowflake login), deploy this repo on Streamlit Community Cloud.
-
-You must provide Snowflake credentials as Streamlit secrets (never hardcode them).
-
-In Streamlit Cloud, set secrets either as:
+In Streamlit Cloud, set these secrets (App → Settings → Secrets):
 
 ```toml
-# .streamlit/secrets.toml (Streamlit Cloud secrets UI)
-[snowflake]
-account = "..."
-user = "..."
-password = "..."
-role = "..."
-warehouse = "..."
-database = "..."
-schema = "..."
-authenticator = "snowflake"
+SNOWFLAKE_ACCOUNT = "..."
+SNOWFLAKE_USER = "..."
+SNOWFLAKE_PASSWORD = "..."
+SNOWFLAKE_AUTHENTICATOR = "snowflake"
+SNOWFLAKE_ROLE = "ACCOUNTADMIN"
+SNOWFLAKE_WAREHOUSE = "COMPUTE_WH"
+SNOWFLAKE_DATABASE = "US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET"
+SNOWFLAKE_SCHEMA = "PUBLIC"
 ```
 
-or:
+After deployment, Streamlit will provide a public URL for the app.
 
-```toml
-[connections.snowflake]
-account = "..."
-user = "..."
-password = "..."
-role = "..."
-warehouse = "..."
-database = "..."
-schema = "..."
-authenticator = "snowflake"
-```
+## What was changed
 
-Then set the app entrypoint to `streamlit_app.py`.
+- Added `streamlit_app.py` to provide a web UI that calls `PopulationChatbot.handle_user_question()` directly.
+- Updated `utils/config.py` so Snowflake credentials come from environment variables / secrets (safe for public deployment).
 
-## Security
-
-`utils/config.py` reads Snowflake connection settings from environment variables (`SNOWFLAKE_*`) so secrets aren’t committed.
-
-# Snowflake_take_home_project
-# Snowflake_take_home_project
