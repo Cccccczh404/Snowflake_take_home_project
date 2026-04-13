@@ -63,3 +63,4 @@ Then set the app entrypoint to `streamlit_app.py`.
 `utils/config.py` reads Snowflake connection settings from environment variables (`SNOWFLAKE_*`) so secrets aren’t committed.
 
 # Snowflake_take_home_project
+# Snowflake_take_home_project
