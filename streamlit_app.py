@@ -26,11 +26,26 @@ def _hydrate_env_from_streamlit_secrets() -> None:
         "SNOWFLAKE_DATABASE",
         "SNOWFLAKE_SCHEMA",
     ]
+
+    # Support both:
+    # 1) flat secrets: SNOWFLAKE_ACCOUNT="..."
+    # 2) sectioned secrets:
+    #    [snowflake]
+    #    SNOWFLAKE_ACCOUNT="..."
+    snowflake_section = None
+    try:
+        snowflake_section = secrets.get("snowflake")
+    except Exception:
+        snowflake_section = None
+
     for k in keys:
         if os.getenv(k):
             continue
         if k in secrets and str(secrets[k]).strip():
             os.environ[k] = str(secrets[k])
+            continue
+        if isinstance(snowflake_section, dict) and k in snowflake_section and str(snowflake_section[k]).strip():
+            os.environ[k] = str(snowflake_section[k])
 
 
 _hydrate_env_from_streamlit_secrets()
