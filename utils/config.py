@@ -41,7 +41,7 @@ SNOWFLAKE_CONNECTION = {
 # CORTEX LLM
 # ============================================================
 
-CORTEX_MODEL = "mistral-large2"
+CORTEX_MODEL = "claude-4-sonnet"
 
 # ============================================================
 # TABLE CATALOG

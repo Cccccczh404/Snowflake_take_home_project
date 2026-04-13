@@ -417,6 +417,7 @@ class PopulationChatbot:
                     status="OUT_OF_SCOPE",
                     error_message=route.reason or "Question is outside the supported scope.",
                     context={"intent": route.intent},
+                    history=self.history,
                 )
                 self._record(user_question, resp.user_message)
                 return resp
@@ -474,6 +475,7 @@ class PopulationChatbot:
                 status="UNHANDLED_EXCEPTION",
                 error_message=str(exc),
                 context={"traceback": traceback.format_exc()},
+                history=self.history,
             )
             self._record(user_question, resp.user_message)
             return resp
@@ -517,6 +519,7 @@ class PopulationChatbot:
                     or f"Need more information to answer. Missing: {table_sel.filters_needed}"
                 ),
                 context={"filters_needed": table_sel.filters_needed},
+                history=hist,
             )
 
         if not table_sel.tables:
@@ -527,6 +530,7 @@ class PopulationChatbot:
                 status="TABLE_SELECTION_FAILED",
                 error_message="Could not identify which dataset to query.",
                 context={"table_sel_message": table_sel.message},
+                history=hist,
             )
 
         # Step 2b — CBG county disambiguation (only for census_block_group grain)
@@ -556,6 +560,7 @@ class PopulationChatbot:
                 status=last_error["status"],
                 error_message=last_error["message"],
                 context=last_error.get("context", {}),
+                history=hist,
             )
 
         if query_result.row_count == 0:
@@ -569,6 +574,7 @@ class PopulationChatbot:
                     "The location or filter you specified may not exist in the dataset."
                 ),
                 context={"sql": final_sql, "tables": table_sel.tables},
+                history=hist,
             )
 
         # Step 6 — Grounded QA response
