@@ -2,6 +2,15 @@ from __future__ import annotations
 
 import os
 
+try:
+    # Allows local dev via a .env file without hardcoding secrets.
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    # If python-dotenv isn't installed (or .env is absent), fall back to real env vars.
+    pass
+
 # ============================================================
 # LOCAL DATA FILES  (relative to the project root)
 # ============================================================

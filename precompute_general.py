@@ -12,9 +12,9 @@ import snowflake.connector
 # ============================================================
 
 SNOWFLAKE_CONFIG: Dict[str, str] = {
-    "account": "BCUDXAG-LVC55427",
-    "user": "ZHIHENGCHENG",
-    "password": "passwdBilly3737!",
+    "account": "YOUR_ACCOUNT",
+    "user": "YOUR_USER",
+    "password": "YOUR_PASSWORD",
     "authenticator": "snowflake",
     "role": "ACCOUNTADMIN",
     "warehouse": "COMPUTE_WH",
@@ -32,7 +32,7 @@ ACS_DATASET = f"https://api.census.gov/data/{ACS_YEAR}/acs/acs5"
 REQUEST_TIMEOUT = 60
 REQUEST_SLEEP_SEC = 0.15
 
-OUTPUT_DIR = r"E:\coding\snowflake\output"
+OUTPUT_DIR = r".\output"
 OUTPUT_CSV = os.path.join(OUTPUT_DIR, "cbg_population_features.csv")
 OUTPUT_PARQUET = os.path.join(OUTPUT_DIR, "cbg_population_features.parquet")
 

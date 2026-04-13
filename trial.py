@@ -2,9 +2,9 @@ import snowflake.connector
 from snowflake.connector import DictCursor
 
 conn = snowflake.connector.connect(
-    account="BCUDXAG-LVC55427",
-    user="ZHIHENGCHENG",
-    password="passwdBilly3737!",   # ⚠️ don't hardcode in real projects
+    account="YOUR_ACCOUNT",
+    user="YOUR_USER",
+    password="YOUR_PASSWORD",   # ⚠️ don't hardcode in real projects
     authenticator="snowflake",
     warehouse="COMPUTE_WH",
     database="US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET",
